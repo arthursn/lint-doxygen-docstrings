@@ -1,0 +1,166 @@
+#!/bin/env python3
+
+import re
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+
+
+FILE_EXTENSIONS = ('.h', '.cpp', '.hpp', '.hxx', '.cxx')
+
+
+@dataclass
+class DocOpeningStrings:
+    block: str
+    inline: str
+    command_preffix: str
+
+    @property
+    def blen(self):
+        return len(self.block)
+
+    @property
+    def ilen(self):
+        return len(self.inline)
+
+
+PREFERRED: DocOpeningStrings
+DEPRECATED: DocOpeningStrings
+
+
+def lint_doxygen_docstrings(fname, inplace=False):
+    global PREFERRED
+    global DEPRECATED
+
+    data = []
+
+    newline_char = '\n'
+    with open(fname, 'r', newline='') as f:
+        first_line = f.readline()
+        if first_line[-2:] == '\r\n':
+            newline_char = '\r\n'
+        elif first_line[-2:] == '\n\r':
+            newline_char = '\n\r'
+
+    with open(fname, 'r', newline=newline_char) as f:
+        block_open = False
+        leading_spaces = ''
+        for line in f:
+            # Replaces /*! and //! by preferred javadoc style /** and ///
+            line = line.replace(DEPRECATED.block, PREFERRED.block)
+            line = line.replace(DEPRECATED.inline, PREFERRED.inline)
+            for cmd_name in ['name', 'brief', 'param', 'return']:
+                line = line.replace(f'{DEPRECATED.command_preffix}{cmd_name}',
+                                    f'{PREFERRED.command_preffix}{cmd_name}')
+
+            # Trims leading and trailing spaces
+            stripped_line = line.strip(' ')
+
+            if not block_open:
+                leading_spaces = ' ' * (len(line) - len(line.lstrip()))
+
+                # If block comment,
+                # process /** stuff, but leave /*** alone
+                if re.match(f'{re.escape(PREFERRED.block)}(?!\*)',
+                            stripped_line[:PREFERRED.blen + 1]):
+                    # Block opens and closes
+                    if '*/' in line:
+                        # Tranforms this:
+                        #   /** stuff */
+                        # into this:
+                        #   /// like this
+                        line = leading_spaces + PREFERRED.inline + ' ' + \
+                            stripped_line[PREFERRED.blen:].replace('*/', '', 1).strip(' ')
+                    else:
+                        block_open = True
+                        # Transforms this:
+                        #   /**stuff
+                        # into this:
+                        #   /** stuff
+                        line = leading_spaces + PREFERRED.block + ' ' + \
+                            stripped_line[PREFERRED.blen:].lstrip(' ')
+
+                    data.append(line.rstrip(' '))
+                    continue
+
+                # If inline comment,
+                # process ///stuff, but leave //// and ///< alone
+                if re.match(f'{re.escape(PREFERRED.inline)}(?![/<])',
+                            stripped_line[:PREFERRED.ilen + 1]):
+                    # Transforms this:
+                    #   ///stuff
+                    # into this:
+                    #   /// stuff
+                    line = leading_spaces + PREFERRED.inline + ' ' + \
+                        stripped_line[PREFERRED.ilen:].lstrip(' ')
+                    data.append(line.rstrip(' '))
+                    continue
+
+            else:
+                # Closes block
+                if '*/' in line:
+                    block_open = False
+
+                    stripped_line = stripped_line.replace('* */', '*/', 1)
+
+                    if stripped_line[:2] == '*/':
+                        # Transforms this:
+                        #   /** stuff
+                        #    */
+                        # into this:
+                        #   /// stuff
+                        if stripped_line.strip() == '*/' and PREFERRED.block in data[-1]:
+                            data[-1] = data[-1].replace(PREFERRED.block, PREFERRED.inline, 1)
+                            continue
+                        line = leading_spaces + ' ' + stripped_line
+
+                        data.append(line.rstrip(' '))
+                        continue
+                elif data[-1].strip() == PREFERRED.block:
+                    # Transforms this:
+                    #   /**
+                    #   stuff
+                    # into this:
+                    #   /** stuff
+                    data[-1] = leading_spaces + PREFERRED.block + ' ' + stripped_line.lstrip('* ')
+                    continue
+
+                if stripped_line[:1] != '*':
+                    # Transform this:
+                    #   /** stuff
+                    #   more stuff
+                    # into this:
+                    #   /** stuff
+                    #    * more stuff
+                    line = leading_spaces + (' * ' + stripped_line)
+                    data.append(line.rstrip(' '))
+                    continue
+                else:
+                    line = leading_spaces + ' ' + stripped_line
+                    data.append(line)
+                    continue
+
+            data.append(line.rstrip(' '))  # removes trailing spaces and append line
+
+    if inplace:
+        with open(fname, 'w') as f:
+            f.writelines(data)
+    else:
+        for line in data:
+            print(line, end='')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Lints doxygen docstrings to standard notation')
+    parser.add_argument('filenames', nargs='+', help='Filenames')
+    parser.add_argument('-i', '--inplace', action='store_true', help='Inplace edit, if specified')
+    args = parser.parse_args()
+
+    PREFERRED = DocOpeningStrings('/**', '///', '@')
+    DEPRECATED = DocOpeningStrings('/*!', '//!', '\\')
+
+    for fname in args.filenames:
+        if Path(fname).suffix in FILE_EXTENSIONS:
+            lint_doxygen_docstrings(fname, args.inplace)
+        else:
+            print(f'Skipping "{fname}" with unsupported file extension')
