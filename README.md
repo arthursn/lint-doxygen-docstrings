@@ -4,7 +4,7 @@ Simple python3 tool for linting Doxygen docstrings
 
 # Usage
 
-```bash
+```
 usage: lint-doxygen-docstrings [-h] [-i] filenames [filenames ...]
 
 Lints doxygen docstrings to standard notation
@@ -19,6 +19,6 @@ optional arguments:
 
 ## Example
 
-```bash
+```sh
 lint-doxygen-docstrings -i file1.cpp file2.h file3.cxx
 ```
